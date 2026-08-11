@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Next.js and build output
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+
+# Runtime data (keep directory placeholders)
+data/**
+!data/.gitkeep
+
+# Local tools
+.tools/**
+!.tools/.gitkeep
+.agents/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Platform and editor files
+.vercel/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
