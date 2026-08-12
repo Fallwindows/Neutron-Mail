@@ -172,7 +172,11 @@ export function validateTriageDecisions(value: unknown, expectedIds?: readonly s
 export function parseTriageDecisions(content: string, expectedIds?: readonly string[]) {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start < 0 || end < start) throw new Error("Missing JSON object.");
+    parsed = JSON.parse(trimmed.slice(start, end + 1));
   } catch {
     throw new Error("Triage model returned invalid JSON.");
   }
