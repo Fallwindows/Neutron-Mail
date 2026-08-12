@@ -4,8 +4,8 @@ import { accountFilePath, accountLockPath, ensureAccountDataDirectory } from "@/
 import { getSession } from "@/lib/session";
 import { withFileLock } from "@/lib/file-lock";
 import { buildGoalsPrompt, fetchInboxEmails, fetchSentKnownContacts } from "@/lib/gmail-importance";
-import { getUsageSummary, callOpenRouterOnce } from "@/lib/openrouter";
-import { MAX_GOAL_PROFILE_EMAILS, MAX_IMPORTANCE_INBOX_EMAILS, MAX_IMPORTANCE_SCAN_EMAILS, readEffectiveImportanceRules, readGoalsProfile, saveGoalsProfile, saveRankedInboxCache, scoreEmails, validateGoalsProfile } from "@/lib/importance";
+import { getUsageSummary, callOpenRouterOnce, parseOpenRouterJson } from "@/lib/openrouter";
+import { MAX_GOAL_PROFILE_EMAILS, MAX_IMPORTANCE_INBOX_EMAILS, MAX_IMPORTANCE_SCAN_EMAILS, type GoalsProfile, readEffectiveImportanceRules, readGoalsProfile, saveGoalsProfile, saveRankedInboxCache, scoreEmails, validateGoalsProfile } from "@/lib/importance";
 import { resolveGoogleAccessToken } from "@/lib/google-connection";
 import { readKnownContacts, saveKnownContacts } from "@/lib/known-contacts";
 import { applyTriageDecisions, buildTriagePrompt, parseTriageDecisions, prefilterForTriage, type TriagedEmail } from "@/lib/triage";
@@ -35,19 +35,37 @@ export async function POST(request: Request) {
       const requestId = `goals-profile-${Date.now()}`;
       const completion = await callOpenRouterOnce({
         model: process.env.OPENROUTER_GOALS_MODEL ?? process.env.OPENROUTER_PROFILE_MODEL ?? "google/gemini-2.5-flash-lite",
-        purpose: "goals_profile", requestId, attempt: 1, maxTokens: 1_000, jsonOnly: true,
+        purpose: "goals_profile", requestId, attempt: 1, maxTokens: 4_000, jsonOnly: true,
         messages: [
           { role: "system", content: "You identify durable email-priority goals and signals. Output valid compact JSON only." },
           { role: "user", content: buildGoalsPrompt(emails) },
         ],
       });
-      let parsed: unknown;
-      try { parsed = JSON.parse(completion.content); }
-      catch {
+      let goalsProfile: GoalsProfile;
+      try {
+        goalsProfile = validateGoalsProfile(parseOpenRouterJson(completion.content));
+      } catch {
         await appendFile(accountFilePath(session.email, "goals_profile_raw_failures.log"), `${new Date().toISOString()} ${requestId}\n${completion.content}\n---\n`, "utf8");
-        throw new Error("OpenRouter returned invalid JSON. The raw response was logged locally; no automatic retry was made.");
+        const repair = await callOpenRouterOnce({
+          model: process.env.OPENROUTER_GOALS_MODEL ?? process.env.OPENROUTER_PROFILE_MODEL ?? "google/gemini-2.5-flash-lite",
+          purpose: "goals_profile",
+          requestId,
+          attempt: 2,
+          maxTokens: 2_500,
+          jsonOnly: true,
+          messages: [
+            { role: "system", content: "Repair the supplied partial or malformed goals profile into compact valid JSON. Use only information already present. Fill missing required arrays with empty arrays. Return JSON only." },
+            { role: "user", content: `Return exactly this schema with at most 8 goals and 12 strings per list: {"summary":"","goals":[{"goal":"","signals":[],"weight":1}],"priority_people":[],"priority_organizations":[],"priority_topics":[],"urgency_signals":[],"low_priority_signals":[]}\n\nMODEL_OUTPUT_TO_REPAIR:\n${completion.content}` },
+          ],
+        });
+        try {
+          goalsProfile = validateGoalsProfile(parseOpenRouterJson(repair.content));
+        } catch {
+          await appendFile(accountFilePath(session.email, "goals_profile_raw_failures.log"), `${new Date().toISOString()} ${requestId}-repair\n${repair.content}\n---\n`, "utf8");
+          throw new Error("The importance model returned incomplete JSON twice. No profile was saved; try setup again.");
+        }
       }
-      const stored = { owner_email: session.email, generated_at: new Date().toISOString(), sampled_emails: emails.length, profile: validateGoalsProfile(parsed) };
+      const stored = { owner_email: session.email, generated_at: new Date().toISOString(), sampled_emails: emails.length, profile: goalsProfile };
       await saveGoalsProfile(stored);
       const rawInboxSource = rawEmails.slice(0, MAX_IMPORTANCE_SCAN_EMAILS);
       const inboxCandidates = prefilterForTriage(rawInboxSource, knownContacts).candidates;

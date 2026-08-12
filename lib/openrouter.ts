@@ -30,6 +30,14 @@ type OpenRouterResponse = {
   error?: { message?: string };
 };
 
+export function parseOpenRouterJson(content: string) {
+  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("Model response did not contain a complete JSON object.");
+  return JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+}
+
 export type CallLogEntry = {
   timestamp: string;
   model: string;
